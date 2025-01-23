@@ -1,4 +1,19 @@
+/**
+ * @class WinDivert
+ * @brief A Node.js wrapper for the WinDivert driver, enabling packet interception and modification.
+ * 
+ * This class provides an interface to the WinDivert driver, allowing for packet capturing,
+ * modification, and injection on Windows systems.
+ */
+
 #include "node-windivert.h"
+
+/**
+ * @brief Initializes the WinDivert module and exports its functionality.
+ * @param env The Node.js environment.
+ * @param exports The exports object to attach the module to.
+ * @return The modified exports object containing the WinDivert class.
+ */
 Napi::Object WinDivert::Init(Napi::Env env, Napi::Object exports)
 {
 	Napi::HandleScope scope(env);
@@ -11,6 +26,13 @@ Napi::Object WinDivert::Init(Napi::Env env, Napi::Object exports)
 	return exports;
 }
 
+/**
+ * @brief Constructor for the WinDivert class.
+ * @param info Contains the construction parameters:
+ *             - filter: String containing the WinDivert filter expression
+ *             - layer: (Optional) The WinDivert layer to operate on
+ *             - flags: (Optional) Additional flags for WinDivert operation
+ */
 WinDivert::WinDivert(const Napi::CallbackInfo &info) : Napi::ObjectWrap<WinDivert>(info)
 {
 	std::cout << "WinDivert object created" << std::endl;
@@ -36,6 +58,11 @@ WinDivert::WinDivert(const Napi::CallbackInfo &info) : Napi::ObjectWrap<WinDiver
 	this->handle_ = INVALID_HANDLE_VALUE;
 }
 
+/**
+ * @brief Destructor for the WinDivert class.
+ * Ensures proper cleanup of resources by stopping the receive thread
+ * and closing the WinDivert handle.
+ */
 WinDivert::~WinDivert()
 {
 	std::cout << "WinDivert destructor called" << std::endl;
@@ -52,6 +79,12 @@ WinDivert::~WinDivert()
 	}
 }
 
+/**
+ * @brief Starts receiving packets asynchronously.
+ * @param info Contains the callback function to be called for each received packet.
+ * @return String indicating method execution status.
+ * @throws Error if filter is not opened or callback is not provided.
+ */
 Napi::Value WinDivert::recv(const Napi::CallbackInfo &info)
 {
 	Napi::Env env = info.Env();
@@ -79,6 +112,12 @@ Napi::Value WinDivert::recv(const Napi::CallbackInfo &info)
 	return Napi::String::New(env, "Recv method executed");
 }
 
+/**
+ * @brief Opens the WinDivert handle with specified parameters.
+ * @param info Not used.
+ * @return Undefined.
+ * @throws Error with detailed message if opening fails.
+ */
 Napi::Value WinDivert::open(const Napi::CallbackInfo &info)
 {
 	Napi::Env env = info.Env();
@@ -153,6 +192,14 @@ Napi::Value WinDivert::open(const Napi::CallbackInfo &info)
 	return env.Undefined();
 }
 
+/**
+ * @brief Calculates checksums for a packet.
+ * @param info Contains:
+ *             - packet: Buffer containing the packet data
+ *             - flags: Calculation flags
+ * @return Object containing calculated checksums (UDP, TCP, IP).
+ * @throws Error if calculation fails.
+ */
 Napi::Value WinDivert::HelperCalcChecksums(const Napi::CallbackInfo &info)
 {
 	Napi::Env env = info.Env();
@@ -184,6 +231,12 @@ Napi::Value WinDivert::HelperCalcChecksums(const Napi::CallbackInfo &info)
 	return checksumObject;
 }
 
+/**
+ * @brief Sends a packet through the WinDivert handle.
+ * @param info Contains the packet data and address information.
+ * @return Boolean indicating send success.
+ * @throws Error if send fails or filter is not opened.
+ */
 Napi::Value WinDivert::send(const Napi::CallbackInfo &info)
 {
 	Napi::Env env = info.Env();
@@ -222,6 +275,12 @@ Napi::Value WinDivert::send(const Napi::CallbackInfo &info)
 	return Napi::Boolean::New(env, send);
 }
 
+/**
+ * @brief Closes the WinDivert handle and cleans up resources.
+ * @param info Not used.
+ * @return Boolean indicating close success.
+ * @throws Error if close fails or filter is not opened.
+ */
 Napi::Value WinDivert::close(const Napi::CallbackInfo &info)
 {
 	Napi::Env env = info.Env();
@@ -247,6 +306,10 @@ Napi::Value WinDivert::close(const Napi::CallbackInfo &info)
 	}
 	return Napi::Boolean::New(env, close);
 }
+
+/**
+ * @brief Stops the packet receiving thread.
+ */
 void WinDivert::StopThread()
 {
 	if (this->recvThread.joinable())
@@ -259,6 +322,11 @@ void WinDivert::StopThread()
 		}
 	}
 }
+
+/**
+ * @brief Starts the packet receiving thread.
+ * @throws system_error if thread creation fails.
+ */
 void WinDivert::StartThread()
 {
 	if (this->recvThread.joinable())
@@ -279,6 +347,10 @@ void WinDivert::StartThread()
 	}
 }
 
+/**
+ * @brief Main thread function for receiving packets.
+ * Continuously receives packets and calls the JavaScript callback.
+ */
 void WinDivert::ThreadFunction()
 {
 	char packet[MAXBUF];
@@ -335,6 +407,12 @@ void WinDivert::ThreadFunction()
 	}
 }
 
+/**
+ * @brief Module initialization function.
+ * @param env The Node.js environment.
+ * @param exports The exports object to attach the module to.
+ * @return The modified exports object.
+ */
 Napi::Object InitAll(Napi::Env env, Napi::Object exports)
 {
 	return WinDivert::Init(env, exports);

@@ -1,11 +1,37 @@
+/**
+ * @fileoverview This module provides packet header decoding functionality for network packets.
+ * It includes utilities for parsing IP, TCP, UDP, and ICMP headers as well as TLS handshake detection.
+ * 
+ * @module decoders
+ */
+
 const UINT32_SIZE_BYTES = 4;
+
+/**
+ * Performs a 16-bit byte swap operation
+ * @param {number} value - The value to byte swap
+ * @returns {number} The byte swapped value
+ */
 function BYTESWAP16(value) {
   return ((value & 0xFF) << 8) | ((value >> 8) & 0xFF);
 }
 
+/**
+ * Class for reading and parsing network packet headers
+ * Supports IPv4, IPv6, TCP, UDP, ICMP headers and TLS handshake detection
+ */
 class HeaderReader {
+  /**
+   * Creates a new HeaderReader instance
+   */
   constructor() {
   }
+
+  /**
+   * Sets the packet buffer to read headers from
+   * @param {Buffer|Uint8Array} packetBuffer - The buffer containing packet data
+   * @throws {TypeError} If packetBuffer is not a Buffer or Uint8Array
+   */
   setPacketBuffer(packetBuffer) {
     if ((Buffer && !Buffer.isBuffer(packetBuffer)) && !(packetBuffer instanceof Uint8Array)) {
       throw new TypeError('packetBuffer must be a Buffer or Uint8Array');
@@ -14,6 +40,12 @@ class HeaderReader {
     this.packetDataView = new DataView(packetBuffer.buffer);
     this.packetLength = packetBuffer.buffer.byteLength||packetBuffer.length;
   }
+
+  /**
+   * Sets the address buffer containing network address information
+   * @param {Buffer|Uint8Array} addressBuffer - The buffer containing address data
+   * @throws {TypeError} If addressBuffer is not a Buffer or Uint8Array
+   */
   setAddressBuffer(addressBuffer) {
     if (!Buffer.isBuffer(addressBuffer) && !(addressBuffer instanceof Uint8Array)) {
       throw new TypeError('packetBuffer must be a Buffer or Uint8Array');
@@ -22,8 +54,12 @@ class HeaderReader {
     this.addressDataView = new DataView(addressBuffer.buffer);
   }
 
-
-  readIPHdr(offset) {
+  /**
+   * Reads an IPv4 header from the packet buffer
+   * @param {number} offset - Offset into the packet buffer
+   * @returns {Object} Object containing IPv4 header field getters and setters
+   */
+  #readIPHdr(offset) {
     const IP_HEADER_MIN_SIZE = 20;
 
     if (this.packetLength < IP_HEADER_MIN_SIZE) {
@@ -138,7 +174,13 @@ class HeaderReader {
       getReserved, setReserved
     };
   }
-  readIPv6Hdr(offset) {
+
+  /**
+   * Reads an IPv6 header from the packet buffer
+   * @param {number} offset - Offset into the packet buffer
+   * @returns {Object} Object containing IPv6 header field getters and setters
+   */
+  #readIPv6Hdr(offset) {
     const getVersion = () => (this.packetDataView.getUint8(offset + 0) & 0xF0) >> 4;
     const getTrafficClass0 = () => (this.packetDataView.getUint8(offset + 0) & 0x0F);
     const getTrafficClass1 = () => (this.packetDataView.getUint8(offset + 1) & 0xF0) >> 4;
@@ -220,6 +262,13 @@ class HeaderReader {
       getDstAddr, setDstAddr
     };
   }
+
+  /**
+   * Reads ICMP header from the packet buffer
+   * @private
+   * @param {number} offset - Offset into the packet buffer
+   * @returns {Object} Object containing ICMP header field getters and setters
+   */
   #readIcmpHdr(offset) {
     const getType = () => this.packetDataView.getUint8(offset + 0);
     const setType = (value) => this.packetDataView.setUint8(offset + 0, value);
@@ -240,6 +289,13 @@ class HeaderReader {
       getBody, setBody
     };
   }
+
+  /**
+   * Reads TCP header from the packet buffer
+   * @private
+   * @param {number} offset - Offset into the packet buffer
+   * @returns {Object} Object containing TCP header field getters and setters
+   */
   #readTcpHdr(offset) {
     const getSrcPort = () => this.packetDataView.getUint16(offset + 0);
     const setSrcPort = (value) => this.packetDataView.setUint16(offset + 0, value);
@@ -338,6 +394,13 @@ class HeaderReader {
       getUrgPtr, setUrgPtr
     };
   }
+
+  /**
+   * Reads UDP header from the packet buffer
+   * @private
+   * @param {number} offset - Offset into the packet buffer
+   * @returns {Object} Object containing UDP header field getters and setters
+   */
   #readUdpHdr(offset) {
     const getSrcPort = () => this.packetDataView.getUint16(offset + 0); 
     const setSrcPort = (value) => this.packetDataView.setUint16(offset + 0, value);
@@ -358,6 +421,13 @@ class HeaderReader {
       getChecksum, setChecksum
     };
   }
+
+  /**
+   * Reads network interface data from the address buffer
+   * @private
+   * @param {number} offset - Offset into the address buffer
+   * @returns {Object} Object containing network interface data getters and setters
+   */
   #readNetworkData(offset) {
     const getIfIdx = () => this.addressDataView.getUint32(offset + 0); 
     const setIfIdx = (value) => this.addressDataView.setUint32(offset + 0, value);
@@ -370,6 +440,13 @@ class HeaderReader {
       getSubIfIdx, setSubIfIdx
     };
   }
+
+  /**
+   * Reads flow/socket data from the address buffer
+   * @private
+   * @param {number} offset - Offset into the address buffer
+   * @returns {Object} Object containing flow/socket data getters and setters
+   */
   #readFlowOrSocketData(offset) {
     const getEndpointId = () => this.addressDataView.getBigUint64(offset + 0);
     const setEndpointId = (value) => this.addressDataView.setBigUint64(offset + 0, value);
@@ -426,6 +503,13 @@ class HeaderReader {
       getProtocol, setProtocol
     };
   }
+
+  /**
+   * Reads reflection data from the address buffer
+   * @private
+   * @param {number} offset - Offset into the address buffer
+   * @returns {Object} Object containing reflection data getters and setters
+   */
   #readReflectData(offset) {
     const getTimestamp = () => this.addressDataView.getBigUint64(offset + 0);
     const setTimestamp = (value) => this.addressDataView.setBigUint64(offset + 0, value);
@@ -450,6 +534,12 @@ class HeaderReader {
       getPriority, setPriority
     };
   }
+
+  /**
+   * Reads address data from the address buffer
+   * @param {number} offset - Offset into the address buffer
+   * @returns {Object} Object containing address data getters and setters
+   */
   readAddressData(offset) {
     const getTimestamp = () => this.addressDataView.getBigUint64(offset + 0); 
     const setTimestamp = (value) => this.addressDataView.setBigUint64(offset + 0, value);
@@ -551,7 +641,13 @@ class HeaderReader {
       readLayerHdr
     };
   }
-  readIpv6FragHdr(offset = 0) {
+
+  /**
+   * Reads IPv6 fragmentation header
+   * @param {number} [offset=0] - Offset into the packet buffer
+   * @returns {Object} Object containing IPv6 fragmentation header getters and setters
+   */
+  #readIpv6FragHdr(offset = 0) {
     
     const getNextHdr = () => this.dataView.getUint8(offset);
     const setNextHdr = (value) => this.dataView.setUint8(offset, value);
@@ -579,6 +675,13 @@ class HeaderReader {
       getMF
     };
   }
+
+  /**
+   * Checks if the packet contains a TLS handshake
+   * @private
+   * @param {Object} info - Packet information object
+   * @returns {boolean} True if packet contains TLS handshake, false otherwise
+   */
   #isTLSHandshake(info) {
     if (!info || !info.dataLength || info.dataOffset===-1) return false;    
     
@@ -596,6 +699,11 @@ class HeaderReader {
   }
 
 
+  /**
+   * Extracts Server Name Indication (SNI) from TLS handshake
+   * @private
+   * @param {Object} info - Packet information object
+   */
   #extractSni(info) {
     if (!info || !info.dataLength || info.dataOffset===-1) return;
     const HOST_MAXLEN = 253; 
@@ -649,6 +757,11 @@ class HeaderReader {
     return;
   }
 
+  /**
+   * Helper function to parse a complete network packet
+   * Detects packet type and parses appropriate headers
+   * @returns {Object|null} Parsed packet information or null if invalid
+   */
   WinDivertHelperParsePacket() {
     const version = (this.packetDataView.getUint8(0) & 0b11110000) >>> 4;
     const packetInfo = {
@@ -705,6 +818,14 @@ class HeaderReader {
       PacketNextLength: this.packetLength - packetInfo.headerLength - packetInfo.dataLength
     };
   }
+
+  /**
+   * Parses IP packet based on version
+   * @private
+   * @param {number} version - IP version (4 or 6)
+   * @param {Object} info - Packet information object
+   * @returns {boolean} True if parsing successful, false otherwise
+   */
   #parseIPPacket(version, info) {
     if (version === 4) {
       info.dataOffset=0;
@@ -715,6 +836,13 @@ class HeaderReader {
     }
     return false;
   }
+
+  /**
+   * Parses IPv4 packet
+   * @private
+   * @param {Object} info - Packet information object
+   * @returns {boolean} True if parsing successful, false otherwise
+   */
   #parseIPv4Packet(info) {
     const hdrLength = this.packetDataView.getUint8(0) & 0b00001111;
     
@@ -723,7 +851,7 @@ class HeaderReader {
       return false;
     }
 
-    info.ipHeader = this.readIPHdr(info.dataOffset);
+    info.ipHeader = this.#readIPHdr(info.dataOffset);
     info.protocol = info.ipHeader.getProtocol();
     info.totalLength = info.ipHeader.getLength();
     info.headerLength = info.ipHeader.getHdrLength() * UINT32_SIZE_BYTES;
@@ -742,6 +870,12 @@ class HeaderReader {
 
     return true;
   }
+
+  /**
+   * Parses protocol-specific header (TCP, UDP, ICMP)
+   * @private
+   * @param {Object} info - Packet information object
+   */
   #parseProtocolHeader(info) {
     const PROTOCOL_HANDLERS = {
       6: () => this.#parseTCPHeader(info),    // IPPROTO_TCP
@@ -763,13 +897,20 @@ class HeaderReader {
     info.dataOffset += info.headerLength;
     info.dataLength -= info.headerLength;
   }
+
+  /**
+   * Parses IPv6 packet
+   * @private
+   * @param {Object} info - Packet information object
+   * @returns {boolean} True if parsing successful, false otherwise
+   */
   #parseIPv6Packet(info) {
     if (this.packetLength < 40) {
       console.warn("Invalid packet length");
       return false;
     }
 
-    info.ipHeader = this.readIPv6Hdr(info.dataOffset);
+    info.ipHeader = this.#readIPv6Hdr(info.dataOffset);
     info.protocol = info.ipHeader.getNextHdr();
     info.totalLength = info.ipHeader.getLength() + 40;
     info.packetLength = Math.min(info.totalLength, this.packetLength);
@@ -778,6 +919,13 @@ class HeaderReader {
 
     return this.#parseIPv6ExtHeaders(info);
   }
+
+  /**
+   * Parses IPv6 extension headers
+   * @private
+   * @param {Object} info - Packet information object
+   * @returns {boolean} True if parsing successful, false otherwise
+   */
   #parseIPv6ExtHeaders(info) {
     while (info.fragOff === 0 && info.dataLength >= 2) {
       const headerLength = this.packetDataView.getUint8(info.dataOffset + 1);
@@ -814,12 +962,20 @@ class HeaderReader {
 
     return true;
   }
+
+  /**
+   * Handles IPv6 fragmentation header
+   * @private
+   * @param {Object} info - Packet information object
+   * @param {number} headerLength - Length of the header
+   * @returns {boolean} True if handling successful, false otherwise
+   */
   #handleIPv6FragmentHeader(info, headerLength) {
     if (info.fragment || info.dataLength < headerLength) {
       return false;
     }
 
-    info.fragHeader = this.readIpv6FragHdr(info.dataOffset);
+    info.fragHeader = this.#readIpv6FragHdr(info.dataOffset);
     info.fragOff = info.fragHeader.getFragOff();
     info.MF = info.fragHeader.getMF();
     info.fragment = true;
@@ -827,6 +983,12 @@ class HeaderReader {
 
     return true;
   }
+
+  /**
+   * Parses TCP header
+   * @private
+   * @param {Object} info - Packet information object
+   */
   #parseTCPHeader(info) {
     if (info.dataLength < 20) {
       console.warn("IPPROTO_TCP has invalid header length");
@@ -845,6 +1007,12 @@ class HeaderReader {
     info.headerLength = info.protocolHeader.getHdrLength() * UINT32_SIZE_BYTES;
     info.headerLength = Math.min(info.headerLength, info.dataLength);
   }
+
+  /**
+   * Parses UDP header
+   * @private
+   * @param {Object} info - Packet information object
+   */
   #parseUDPHeader(info) {
     if (info.dataLength < 8) {
       console.warn("IPPROTO_UDP has invalid header length");
@@ -854,6 +1022,12 @@ class HeaderReader {
     info.protocolHeader = this.#readUdpHdr(info.dataOffset);
     info.headerLength = 8;
   }
+
+  /**
+   * Parses ICMP header
+   * @private
+   * @param {Object} info - Packet information object
+   */
   #parseICMPHeader(info) {
     if (info.dataLength < 8) {
       console.warn("IPPROTO_ICMP has invalid header length");

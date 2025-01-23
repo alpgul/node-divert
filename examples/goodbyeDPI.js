@@ -89,145 +89,302 @@ class Filter {
         this.passiveFilter = this.passiveFilter.replace(this.#maxPayloadSizeTemplate, "");
     }
 }
+/**
+ * A class that handles packet manipulation and modification for DPI circumvention.
+ * Provides functionality for packet fragmentation and window size modification.
+ */
 class Patcher {
     #patched;
     #headerReader;
+
     constructor() {
         this.#patched = false;
         this.#headerReader = new wd.HeaderReader();
         this.packetInfo = null;
         this.addrInfo = null;
     }
+
+    /**
+     * Sets and parses the packet buffer for processing
+     * @param {Buffer} buffer - The packet buffer to process
+     */
     setPacketBuffer(buffer) {
         this.#headerReader.setPacketBuffer(buffer);
         this.packetInfo = this.#headerReader.WinDivertHelperParsePacket();
         this.#patched = false;
     }
+
+    /**
+     * Sets and reads the address buffer
+     * @param {Buffer} buffer - The address buffer to process
+     */
     setAdressBuffer(buffer) {
         this.#headerReader.setAddressBuffer(buffer);
         this.addrInfo = this.#headerReader.readAddressData();
     }
+
+    /**
+     * Modifies the TCP window size of a packet
+     * @param {Object} tcpHeader - The TCP header object
+     * @param {number} windowSize - The new window size (1-65535)
+     */
     changeWindowSize(tcpHeader, windowSize) {
         if (windowSize >= 1 && windowSize <= 65535) {
             tcpHeader.setWindow(windowSize);
             this.#patched = true;
         }
     }
-    sendFakePacket(winDivert) {
 
+    /**
+     * Validates input parameters for packet fragmentation
+     * @param {Object} winDivert - The WinDivert instance
+     * @param {number} https_fragment_size - The size of the fragment
+     * @throws {Error} If parameters are invalid or required data is missing
+     */
+    validateInputs(winDivert, https_fragment_size) {
+        if (!winDivert) {
+            throw new Error('winDivert parameter is required');
+        }
+        if (typeof https_fragment_size !== 'number' || https_fragment_size < 1) {
+            throw new Error('https_fragment_size must be a valid positive number');
+        }
+        if (!this.#headerReader || !this.packetInfo) {
+            throw new Error('HeaderReader or packetInfo is not initialized');
+        }
     }
+
+    /**
+     * Calculates the appropriate fragment size based on packet type
+     * @returns {number} The calculated fragment size
+     */
+    calculateFragmentSize() {
+        if (this.packetInfo.isTLSHandshake && this.packetInfo.ServerNameOffset && this.packetInfo.ServerNameLength) {
+            return this.packetInfo.ServerNameOffset - this.packetInfo.PayloadOffset;
+        }
+        return this.https_fragment_size;
+    }
+
+    /**
+     * Creates two packet buffers for fragmentation
+     * @param {number} https_fragment_size - The size to use for fragmentation
+     * @returns {Object} An object containing firstBuffer and secondBuffer
+     */
+    createPacketBuffers(https_fragment_size) {
+        const packetLength = this.#headerReader.packetLength;
+        const sequenceNumber = this.packetInfo.ProtocolHeader.getSeqNum();
+        
+        // Create first buffer
+        const firstSegmentSize = packetLength - this.packetInfo.PayloadLength + https_fragment_size;
+        this.packetInfo.IpHeader.setLength(firstSegmentSize);
+        const firstBuffer = new Uint8Array(firstSegmentSize);
+        firstBuffer.set(this.#headerReader.packetBuffer.slice(0, firstSegmentSize));
+
+        // Create second buffer
+        const secondSegmentSize = packetLength - https_fragment_size;
+        this.packetInfo.IpHeader.setLength(secondSegmentSize);
+        this.packetInfo.ProtocolHeader.setSeqNum(sequenceNumber + https_fragment_size);
+        const secondBuffer = new Uint8Array(secondSegmentSize);
+        secondBuffer.set(this.#headerReader.packetBuffer.slice(0, firstSegmentSize - https_fragment_size), 0);
+        secondBuffer.set(this.#headerReader.packetBuffer.slice(firstSegmentSize, packetLength), firstSegmentSize - https_fragment_size);
+
+        // Reset original values
+        this.packetInfo.ProtocolHeader.setSeqNum(sequenceNumber);
+        this.packetInfo.IpHeader.setLength(packetLength);
+
+        return { firstBuffer, secondBuffer };
+    }
+
+    /**
+     * Sends a packet with recalculated checksums
+     * @param {Object} winDivert - The WinDivert instance
+     * @param {Buffer} buffer - The packet buffer to send
+     * @returns {boolean} Success status of the operation
+     */
+    sendPacketWithChecksum(winDivert, buffer) {
+        this.addrInfo.setIPChecksum(0);
+        this.addrInfo.setTCPChecksum(0);
+        
+        const helper = winDivert.HelperCalcChecksums({ packet: buffer }, 0);
+        if (helper.IPChecksum === 0 || helper.TCPChecksum === 0) {
+            console.log("checksum error");
+            return false;
+        }
+
+        this.addrInfo.setIPChecksum(helper.IPChecksum);
+        this.addrInfo.setTCPChecksum(helper.TCPChecksum);
+        winDivert.send({ packet: buffer, addr: this.#headerReader.addressBuffer });
+        return true;
+    }
+
+    /**
+     * Creates and sends fragmented packets
+     * @param {Object} winDivert - The WinDivert instance
+     * @param {number} https_fragment_size - The size to use for fragmentation
+     * @returns {boolean} Success status of the operation
+     * @throws {Error} If packet creation or sending fails
+     */
     createFragmentPacket(winDivert, https_fragment_size = 2) {
         try {
-            if (!winDivert) {
-                throw new Error('winDivert parameter is required');
-                
-            }
-            if (typeof https_fragment_size !== 'number' || https_fragment_size < 1) {
-                throw new Error('https_fragment_size must be a valid positive number');
-            }
-            
-            if (!this.#headerReader || !this.packetInfo) {
-                throw new Error('HeaderReader or packetInfo is not initialized');
-            }
-
-            let current_fragment_size;
-
-            if (this.packetInfo.isTLSHandshake) {
-
-                if (this.packetInfo.ServerNameOffset && this.packetInfo.ServerNameLength) {                    
-                    current_fragment_size = this.packetInfo.ServerNameOffset - this.packetInfo.PayloadOffset;
-                } else {
-                    current_fragment_size = https_fragment_size;
-                }
-            } else {
-                current_fragment_size = https_fragment_size;
-            }
+            this.validateInputs(winDivert, https_fragment_size);
             
             if (!this.#headerReader.packetLength || !this.packetInfo.PayloadLength) {
                 throw new Error('Packet length information is missing');
             }
 
-            const packetLength = this.#headerReader.packetLength;
-            const sequenceNumber = this.packetInfo.ProtocolHeader.getSeqNum();
-            const firstSegmentSize = packetLength - this.packetInfo.PayloadLength + https_fragment_size;
-            const secondSegmentSize = packetLength - https_fragment_size;
-            this.packetInfo.IpHeader.setLength(firstSegmentSize);
-            const firstBuffer = new Uint8Array(firstSegmentSize);
-            firstBuffer.set(this.#headerReader.packetBuffer.slice(0, firstSegmentSize));
+            const { firstBuffer, secondBuffer } = this.createPacketBuffers(https_fragment_size);
 
-            const secondBuffer = new Uint8Array(secondSegmentSize);
-            this.packetInfo.IpHeader.setLength(secondSegmentSize);
-            this.packetInfo.ProtocolHeader.setSeqNum(sequenceNumber + https_fragment_size);
-            secondBuffer.set(this.#headerReader.packetBuffer.slice(0, firstSegmentSize - https_fragment_size), 0);
-            secondBuffer.set(this.#headerReader.packetBuffer.slice(firstSegmentSize, packetLength), firstSegmentSize - https_fragment_size);
+            // Send packets with checksums
+            if (!this.sendPacketWithChecksum(winDivert, secondBuffer)) return false;
+            if (!this.sendPacketWithChecksum(winDivert, firstBuffer)) return false;
 
-            this.packetInfo.ProtocolHeader.setSeqNum(sequenceNumber);
-            this.packetInfo.IpHeader.setLength(packetLength);
-
-            this.addrInfo.setIPChecksum(0);
-            this.addrInfo.setTCPChecksum(0);
-            let helper = winDivert.HelperCalcChecksums({ packet: secondBuffer }, 0);
-            if (helper.IPChecksum === 0 || helper.TCPChecksum === 0) {
-                console.log("checksum error");
-                return;
-            }
-
-            this.addrInfo.setIPChecksum(helper.IPChecksum);
-            this.addrInfo.setTCPChecksum(helper.TCPChecksum);
-            winDivert.send({ packet: secondBuffer, addr: this.#headerReader.addressBuffer });
-
-            this.addrInfo.setIPChecksum(0);
-            this.addrInfo.setTCPChecksum(0);
-            helper = winDivert.HelperCalcChecksums({ packet: firstBuffer }, 0);
-            if (helper.IPChecksum === 0 || helper.TCPChecksum === 0) {
-                console.log("checksum error");
-                return;
-            }
-            this.addrInfo.setIPChecksum(helper.IPChecksum);
-            this.addrInfo.setTCPChecksum(helper.TCPChecksum);
-            winDivert.send({ packet: firstBuffer, addr: this.#headerReader.addressBuffer });
             return false;
-
         } catch (error) {
             console.error('createFragmentPacket error:', error.message);
-            throw error; 
+            throw error;
         }
     }
 
 }
-(async () => {
-    const filter = Filter.getInstance();
-    filter.generateFilters(null, null);
-    let passiveWindivert = await wd.createWindivert(filter.passiveFilter, wd.LAYERS.NETWORK, wd.FLAGS.DROP);
-    passiveWindivert.open();
-    let quicWindivert = await wd.createWindivert(filter.quicBlockPassiveFilter, wd.LAYERS.NETWORK, wd.FLAGS.DROP);
-    quicWindivert.open();
-    let activeWindivert = await wd.createWindivert(filter.filter, wd.LAYERS.NETWORK, wd.FLAGS.DEFAULT);
-    activeWindivert.open();
-    const patcher = new Patcher();
-    wd.addReceiveListener(activeWindivert, (packet, addr) => {
-        patcher.setAdressBuffer(addr);
-        patcher.setPacketBuffer(packet);
-        if (patcher.packetInfo.Protocol === wd.PROTOCOLS.TCP && patcher.packetInfo.FragOff === 0) {
-            if (patcher.addrInfo.getOutbound() &&
-                (patcher.packetInfo.PayloadLength === 2 ||
-                    patcher.packetInfo.PayloadLength > 16) &&
-                patcher.packetInfo.ProtocolHeader.getDstPort() !== 80 &&
-                patcher.packetInfo.isTLSHandshake
-            ) {
+/**
+ * Main class for DPI circumvention implementation
+ * Manages WinDivert instances and packet processing
+ */
+class GoodbyeDPI {
+    #filter;
+    #passiveWindivert;
+    #quicWindivert;
+    #activeWindivert;
+    #patcher;
+    #timeout;
 
-                return patcher.createFragmentPacket(activeWindivert, 2);
-            }
-        }
+    /**
+     * Creates a new GoodbyeDPI instance
+     * @param {number} timeout - Timeout in milliseconds before cleanup (default: 600000)
+     */
+    constructor(timeout = 600000) {
+        this.#filter = Filter.getInstance();
+        this.#patcher = new Patcher();
+        this.#timeout = timeout;
+    }
 
-    });
-    setTimeout(() => {
+    /**
+     * Initializes the DPI circumvention system
+     * Sets up filters and WinDivert instances
+     * @throws {Error} If initialization fails
+     */
+    async initialize() {
         try {
-            activeWindivert.close();
-            quicWindivert.close();
-            passiveWindivert.close();
+            this.#filter.generateFilters(null, null);
+            await this.#initializeWindivert();
+            this.#setupPacketListener();
+            this.#setupCleanupTimeout();
         } catch (error) {
-            console.error("Error:", error);
+            console.error("Initialization error:", error);
+            this.cleanup();
+            throw error;
         }
-    }, 600000);
+    }
+
+    /**
+     * Initializes WinDivert instances for different packet handling scenarios
+     * @private
+     */
+    async #initializeWindivert() {
+        // Initialize passive windivert
+        this.#passiveWindivert = await wd.createWindivert(
+            this.#filter.passiveFilter,
+            wd.LAYERS.NETWORK,
+            wd.FLAGS.DROP
+        );
+        this.#passiveWindivert.open();
+
+        // Initialize QUIC windivert
+        this.#quicWindivert = await wd.createWindivert(
+            this.#filter.quicBlockPassiveFilter,
+            wd.LAYERS.NETWORK,
+            wd.FLAGS.DROP
+        );
+        this.#quicWindivert.open();
+
+        // Initialize active windivert
+        this.#activeWindivert = await wd.createWindivert(
+            this.#filter.filter,
+            wd.LAYERS.NETWORK,
+            wd.FLAGS.DEFAULT
+        );
+        this.#activeWindivert.open();
+    }
+
+    /**
+     * Sets up the packet listener for processing network traffic
+     * @private
+     */
+    #setupPacketListener() {
+        wd.addReceiveListener(this.#activeWindivert, (packet, addr) => {
+            this.#handlePacket(packet, addr);
+        });
+    }
+
+    /**
+     * Handles incoming packets and determines if they need fragmentation
+     * @param {Buffer} packet - The packet buffer
+     * @param {Buffer} addr - The address buffer
+     * @private
+     */
+    #handlePacket(packet, addr) {
+        this.#patcher.setAdressBuffer(addr);
+        this.#patcher.setPacketBuffer(packet);
+
+        if (this.#shouldFragmentPacket()) {
+            return this.#patcher.createFragmentPacket(this.#activeWindivert, 2);
+        }
+    }
+
+    /**
+     * Determines if a packet should be fragmented based on its properties
+     * @returns {boolean} True if the packet should be fragmented
+     * @private
+     */
+    #shouldFragmentPacket() {
+        const packetInfo = this.#patcher.packetInfo;
+        const addrInfo = this.#patcher.addrInfo;
+
+        return (
+            packetInfo.Protocol === wd.PROTOCOLS.TCP &&
+            packetInfo.FragOff === 0 &&
+            addrInfo.getOutbound() &&
+            (packetInfo.PayloadLength === 2 || packetInfo.PayloadLength > 16) &&
+            packetInfo.ProtocolHeader.getDstPort() !== 80 &&
+            packetInfo.isTLSHandshake
+        );
+    }
+
+    /**
+     * Sets up the cleanup timeout
+     * @private
+     */
+    #setupCleanupTimeout() {
+        setTimeout(() => {
+            this.cleanup();
+        }, this.#timeout);
+    }
+
+    /**
+     * Cleans up resources and closes WinDivert instances
+     */
+    cleanup() {
+        try {
+            this.#activeWindivert?.close();
+            this.#quicWindivert?.close();
+            this.#passiveWindivert?.close();
+        } catch (error) {
+            console.error("Cleanup error:", error);
+        }
+    }
+}
+
+// Initialize and start
+(async () => {
+    const goodbyeDPI = new GoodbyeDPI();
+    await goodbyeDPI.initialize();
 })();
