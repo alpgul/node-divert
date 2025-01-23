@@ -1,32 +1,68 @@
-var wd = require('bindings')('WinDivert');
-wd.decoders = require('./decoders.js');
-wd.listen = function(filter, cb, handleClose){
-	handleClose = handleClose || true;
-	var handle = new wd.WinDivert(filter, 0, 0, 0);
-	handle.open();
-	(function recvLoop(){
-		handle.recv(function(err, data){
-			var ret = cb(data.packet, data.addr);
-			if(Buffer.isBuffer(ret)){
-				handle.HelperCalcChecksums(data, 0);	
-				handle.send(data);
-			}
-			else if(ret!==false){
-				handle.send(data);
-			}
-			recvLoop();
-		});	
-	}());	
-	if(handleClose){
-		function exitHandler(options, err) {
-			console.log("Exiting");
-		    if (err) console.log(err.stack);
-		    if (options.exit){handle.close(); process.exit();}
+const wd = require('bindings')('WinDivert');
+const { HeaderReader, BYTESWAP16 } = require('./decoders.js');
+
+const FLAGS = Object.freeze({
+	DEFAULT: 0x0000,
+	SNIFF: 0x0001,
+	DROP: 0x0002,
+	RECV_ONLY: 0x0004,
+	READ_ONLY: 0x0004,  // Same as RECV_ONLY
+	SEND_ONLY: 0x0008,
+	WRITE_ONLY: 0x0008, // Same as SEND_ONLY
+	NO_INSTALL: 0x0010,
+	FRAGMENTS: 0x0020
+});
+const PROTOCOLS = Object.freeze({
+	TCP: 6,
+	UDP: 17,
+	ICMP: 1,
+	ICMPV6: 58,
+
+});
+const LAYERS = Object.freeze({
+	NETWORK: 0,
+	NETWORK_FORWARD: 1,
+	FLOW: 2,
+	SOCKET: 3,
+	REFLECT: 4
+});
+async function checkAdmin() {
+	await import('is-admin').then(async (isAdmin) => {
+		if (!await isAdmin.default()) {
+			throw new Error('You must run this application as an administrator.');
 		}
-		process.on('exit', exitHandler.bind(null,{cleanup:true}));
-		process.on('SIGINT', exitHandler.bind(null, {exit:true}));
-		process.on('uncaughtException', exitHandler.bind(null, {exit:true}));
-	}
-	return handle;
+	});
+}
+function createWindivert(filter, layer, flag) {
+	return new wd.WinDivert(filter, layer, flag);
 };
-module.exports = wd;
+
+function addReceiveListener(handle, callback) {
+	try {
+		handle.recv(function (packet, addr) {
+			const newPacket = callback(packet, addr);
+			if (Buffer.isBuffer(newPacket)) {
+				try {
+					handle.HelperCalcChecksums(newPacket, 0);
+					handle.send({ packet: newPacket, addr })
+				} catch (error) {
+					console.error("Recv Error:", error);
+				}
+			} else if (newPacket === undefined) {
+				handle.send({ packet, addr });
+			}
+		});
+	} catch (error) {
+		console.error(error);
+	}
+};
+
+module.exports = {
+	FLAGS,
+	LAYERS,
+	PROTOCOLS,
+	createWindivert,
+	addReceiveListener,
+	HeaderReader,
+	BYTESWAP16
+};
